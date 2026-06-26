@@ -214,6 +214,8 @@ const fmt = (value: number) => value.toFixed(3);
 const signedPercent = (value: number) => `${value >= 0 ? "+" : ""}${Math.round(value * 100)}%`;
 const hexColor = (value: number) => `#${value.toString(16).padStart(6, "0")}`;
 const defaultControls = { tau: 0.68, pi: 0.62, rho: 0.72, eps: 0.74, alpha: 0.7, eta: 0.66, lambda: 0.2, chi: 0.35, memory: 0.65 };
+const defaultPlaneX = clamp01((defaultControls.tau + defaultControls.pi) / 2);
+const defaultPlaneY = clamp01((defaultControls.rho + defaultControls.eps) / 2);
 
 function asUnit(value: unknown, fallback: number) {
   return typeof value === "number" && Number.isFinite(value) ? clamp01(value) : fallback;
@@ -321,6 +323,13 @@ function updateMemory(previousMemory: number, phi: number, lambda: number) {
   return clamp01((1 - k) * previousMemory + k * phi);
 }
 
+function updateRememberedAxis(previousAxis: number, instantAxis: number, lambda: number) {
+  const recentWeight = 1 - Math.exp(-lambda);
+  const followRate = 0.035 + recentWeight * 0.55;
+  const nextAxis = previousAxis + (instantAxis - previousAxis) * followRate;
+  return Math.abs(nextAxis - instantAxis) < 0.001 ? instantAxis : clamp01(nextAxis);
+}
+
 function classifyMood(input: {
   tau: number;
   pi: number;
@@ -333,18 +342,57 @@ function classifyMood(input: {
   vital: number;
   x: number;
   y: number;
+  lambda: number;
+  chi: number;
 }): MoodKey {
-  const { tau, pi, rho, eps, alpha, eta, phi, memory, vital, x, y } = input;
+  const { tau, pi, rho, eps, alpha, eta, phi, memory, vital, x, y, lambda, chi } = input;
   const calm = x;
   const action = y;
+  const lowCalm = 1 - calm;
+  const lowPeace = 1 - pi;
+  const lowJoy = 1 - eta;
+  const lowMemory = 1 - memory;
+  const lowVital = 1 - vital;
+  const memoryDrag = lowMemory * (1 - lambda);
   const strain = Math.max(0, (rho + eps) / 2 - (tau + pi) / 2);
+  const plenoScore = vital * 0.3 + phi * 0.25 + eta * 0.2 + calm * 0.15 + action * 0.1;
+  const agotadoScore = clamp01(eps * 0.3 + action * 0.2 + rho * 0.15 + lowPeace * 0.2 + strain * 0.2 + memoryDrag * 0.2);
+  const preocupadoScore = clamp01(action * lowCalm * 0.8 + rho * lowCalm * 0.25 + eps * lowCalm * 0.15 + lowPeace * 0.15);
+  const intensoScore = clamp01(alpha * (lowCalm * 0.48 + lowPeace * 0.32 + lowMemory * 0.12 + action * 0.08));
+  const tristeScore = clamp01(lowJoy * (0.38 + chi * 0.22) + lowVital * (0.36 + chi * 0.18) + memoryDrag * 0.12);
+  const serenoPasivoScore = clamp01(calm * (1 - action) * (0.7 + phi * 0.3));
 
-  if (vital >= 0.75 && phi >= 0.68 && eta >= 0.62) return "pleno";
-  if (eta < 0.35 && vital < 0.5) return "triste";
-  if (strain > 0.35 && calm < 0.45 && action > 0.62) return "agotado";
-  if (calm < 0.45 && action >= 0.55) return "preocupado";
-  if (calm >= 0.6 && action < 0.42) return "serenoPasivo";
-  if (alpha >= 0.72 && calm < 0.52 && memory < 0.62) return "intensoInestable";
+  if (plenoScore >= 0.74 && vital >= 0.72 && eta >= 0.58 && calm >= 0.52 && action >= 0.5) return "pleno";
+
+  const candidates: { mood: MoodKey; score: number; eligible: boolean }[] = [
+    {
+      mood: "agotado",
+      score: agotadoScore,
+      eligible: agotadoScore >= 0.66 && action >= 0.55 && eps >= 0.56 && pi < 0.55,
+    },
+    {
+      mood: "preocupado",
+      score: preocupadoScore,
+      eligible: preocupadoScore >= 0.54 && action >= 0.54 && calm < 0.54,
+    },
+    {
+      mood: "intensoInestable",
+      score: intensoScore,
+      eligible: intensoScore >= 0.42 && alpha >= 0.72 && (calm < 0.58 || pi < 0.58),
+    },
+    {
+      mood: "triste",
+      score: tristeScore,
+      eligible: tristeScore >= 0.58 && eta < 0.45 && vital < 0.56,
+    },
+    {
+      mood: "serenoPasivo",
+      score: serenoPasivoScore,
+      eligible: serenoPasivoScore >= 0.42 && calm >= 0.6 && action < 0.46,
+    },
+  ];
+  const strongest = candidates.filter((candidate) => candidate.eligible).sort((a, b) => b.score - a.score)[0];
+  if (strongest) return strongest.mood;
   return "estable";
 }
 
@@ -1393,6 +1441,8 @@ export default function Home() {
   const [lambda, setLambda] = useState(0.2);
   const [chi, setChi] = useState(0.35);
   const [memory, setMemory] = useState(0.65);
+  const [planeX, setPlaneX] = useState(defaultPlaneX);
+  const [planeY, setPlaneY] = useState(defaultPlaneY);
   const [history, setHistory] = useState<Entry[]>([]);
   const [trail, setTrail] = useState<TrailPoint[]>([]);
   const [isPlaying, setIsPlaying] = useState(false);
@@ -1428,6 +1478,9 @@ export default function Home() {
     setMemory(next.memory);
     setHistory(next.history);
     setTrail(next.trail);
+    const lastTrailPoint = next.trail[next.trail.length - 1];
+    setPlaneX(lastTrailPoint?.x ?? clamp01((next.tau + next.pi) / 2));
+    setPlaneY(lastTrailPoint?.y ?? clamp01((next.rho + next.eps) / 2));
     autoCenterRef.current = { tau: next.tau, pi: next.pi, rho: next.rho, eps: next.eps, alpha: next.alpha, eta: next.eta };
     currentValuesRef.current = { tau: next.tau, pi: next.pi, rho: next.rho, eps: next.eps, alpha: next.alpha, eta: next.eta };
     if (stopPlayback) setIsPlaying(false);
@@ -1490,11 +1543,23 @@ export default function Home() {
   const k = useMemo(() => 1 - Math.exp(-lambda), [lambda]);
   const previewMemory = useMemo(() => updateMemory(memory, phi, lambda), [memory, phi, lambda]);
   const vital = useMemo(() => clamp01((1 - chi) * previewMemory + chi * eta), [chi, previewMemory, eta]);
-  const x = useMemo(() => clamp01((tau + pi) / 2), [tau, pi]);
-  const y = useMemo(() => clamp01((rho + eps) / 2), [rho, eps]);
+  const instantX = useMemo(() => clamp01((tau + pi) / 2), [tau, pi]);
+  const instantY = useMemo(() => clamp01((rho + eps) / 2), [rho, eps]);
+  const x = planeX;
+  const y = planeY;
+
+  useEffect(() => {
+    if (!mounted) return;
+    const intervalId = window.setInterval(() => {
+      setPlaneX((prev) => updateRememberedAxis(prev, instantX, lambda));
+      setPlaneY((prev) => updateRememberedAxis(prev, instantY, lambda));
+    }, 80);
+    return () => window.clearInterval(intervalId);
+  }, [instantX, instantY, lambda, mounted]);
+
   const mood = useMemo(
-    () => classifyMood({ tau, pi, rho, eps, alpha, eta, phi, memory: previewMemory, vital, x, y }),
-    [tau, pi, rho, eps, alpha, eta, phi, previewMemory, vital, x, y]
+    () => classifyMood({ tau, pi, rho, eps, alpha, eta, phi, memory: previewMemory, vital, x, y, lambda, chi }),
+    [tau, pi, rho, eps, alpha, eta, phi, previewMemory, vital, x, y, lambda, chi]
   );
 
   useEffect(() => {
@@ -1599,6 +1664,8 @@ export default function Home() {
     setLambda(0.2);
     setChi(0.35);
     setMemory(0.65);
+    setPlaneX(defaultPlaneX);
+    setPlaneY(defaultPlaneY);
     setHistory([]);
     setTrail([]);
     setIsPlaying(false);
