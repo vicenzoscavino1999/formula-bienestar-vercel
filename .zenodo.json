@@ -1,0 +1,21 @@
+{
+  "title": "Formula del Bienestar",
+  "upload_type": "software",
+  "description": "Aplicacion interactiva en Next.js para visualizar la Formula del Bienestar con plano cartesiano 3D, avatar emocional, memoria interior y valor vital.",
+  "creators": [
+    {
+      "name": "Scavino, Vicenzo",
+      "affiliation": "Independent researcher"
+    }
+  ],
+  "keywords": [
+    "bienestar",
+    "simulacion",
+    "visualizacion",
+    "Next.js",
+    "Three.js"
+  ],
+  "language": "spa",
+  "access_right": "open",
+  "version": "1.0.0"
+}
